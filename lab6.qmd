@@ -50,7 +50,7 @@ scale_color_gradient(low = "blue", high = "red")
 
 ```
 
-#Question 2: 
+#Question 2:
 
 ```{r}
 
@@ -280,7 +280,7 @@ model_metrics %>%
 
 ```
 
-#Question 4 Build Your Own: Based on the output of the code below I decided to use the formula that I chose for logQmean because it helps normalize the distribution of the data, which will create a more legible graph. I believe that the best model is XGBOOST because it has the highest R^2 values which works best with the logQmean formula that I chose. The XG Boost model looks really well because it really represents the data well where the graph is easy to decipher. It is very interesting to analyze the observed vs predicted streamflows from the XGBoost graph.
+#Question 4 Build Your Own: Based on the output of the code below I decided to use the formula that I chose for logQmean because it helps normalize the distribution of the data, which will create a more legible graph. I believe that the best model is XGBOOST because it has the highest R\^2 values which works best with the logQmean formula that I chose. The XG Boost model looks really well because it really represents the data well where the graph is easy to decipher. It is very interesting to analyze the observed vs predicted streamflows from the XGBoost graph.
 
 ```{r}
 library(tidyverse)
