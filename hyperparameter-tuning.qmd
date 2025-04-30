@@ -1,0 +1,293 @@
+---
+title: 'Hyperparameter-Tuning'
+format: 
+  html:
+    self-contained: true
+---
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(powerjoin)
+library(glue)
+library(vip)
+library(baguette)
+library(ggthemes)
+library(visdat)
+library(skimr)
+
+
+root <- 'https://gdex.ucar.edu/dataset/camels/file'
+
+# download.file('https://gdex.ucar.edu/dataset/camels/file/camels_attributes_v2.0.pdf', 
+#               'camels_attributes_v2.0.pdf')
+
+attribute_files <- c(
+  "camels_clim.txt",
+  "camels_geol.txt",
+  "camels_soil.txt",
+  "camels_topo.txt",
+  "camels_vege.txt",
+  "camels_hydro.txt"
+)
+
+
+attribute_urls <- paste0("data/", attribute_files)
+
+
+attribute_tables <- map(attribute_urls, ~read_delim(.x, col_types = cols())) %>% 
+  powerjoin::power_full_join(by = "gauge_id")
+
+clean_data <- attribute_tables %>%
+  janitor::clean_names() %>%
+  distinct() %>%
+  drop_na(gauge_id, gauge_lat, gauge_lon)
+
+
+set.seed(123)
+
+
+data_split <- initial_split(clean_data, prop = 0.8)
+
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+
+
+library(recipes)
+
+
+model_recipe <- recipe(q_mean ~ ., data = train_data) %>%
+  step_rm(gauge_lat, gauge_lon) %>%
+  step_normalize(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes())
+
+
+library(rsample)
+
+set.seed(123)
+
+folds <- vfold_cv(train_data, v = 10)
+
+```
+```{r}
+
+library(parsnip)
+
+lm_model <- linear_reg() %>%
+  set_engine("lm") %>%
+  set_mode("regression")
+
+
+```
+```{r}
+rf_model <- rand_forest(mtry = 5, trees = 500, min_n = 5) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+
+
+```
+
+```{r}
+xgb_model <- boost_tree(trees = 500, learn_rate = 0.05, tree_depth = 6) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+```
+
+
+
+#Based on the code below I believe that the random forest model is the best at performing because it had the lowest RSME and it had the highest R^2. I believe that the random forest model is the best model because they are good at handling complex relationships, interactions, and non-linear patterns in the data, which can be related to the different soil, climate, vegetation, and hydrology variables.
+```{r}
+library(workflowsets)
+library(tidymodels)
+library(ggplot2)
+
+
+model_specs <- list(
+  lm_model  = lm_model,
+  rf_model  = rf_model,
+  xgb_model = xgb_model
+)
+
+wfs <- workflow_set(
+  preproc = list(recipe = model_recipe),
+  models  = model_specs,
+  cross = TRUE
+)
+
+
+wfs_results <- workflow_map(
+  wfs,
+  "fit_resamples",
+  resamples = folds,
+  metrics = metric_set(rmse, rsq),
+  verbose = TRUE
+)
+
+
+autoplot(wfs_results)
+
+```
+
+
+
+```{r}
+
+library(parsnip)
+
+
+rf_tunable_spec <- rand_forest(
+  mtry  = tune(),    
+  trees = 500,      
+  min_n = tune()     
+) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+```
+
+
+```{r}
+library(workflows)
+
+rf_workflow <- workflow() %>%
+  add_recipe(model_recipe) %>%
+  add_model(rf_tunable_spec)
+
+
+```
+
+```{r}
+library(tune)
+dials <- extract_parameter_set_dials(rf_workflow)
+dials$object
+
+```
+
+```{r}
+
+dials_final <- finalize(dials, train_data)
+
+my.grid <- grid_latin_hypercube(
+  dials_final,
+  size = 25
+)
+
+head(my.grid)
+
+
+
+
+```
+```{r}
+library(tune)
+
+model_params <- tune_grid(
+  rf_workflow,
+  resamples = folds,
+  grid = my.grid,
+  metrics = metric_set(rmse, rsq, mae),
+  control = control_grid(save_pred = TRUE)
+)
+
+autoplot(model_params)
+
+
+
+
+```
+```{r}
+
+collect_metrics(model_params)
+
+hp_best <- select_best(model_params, metric = "mae")
+
+```
+```{r}
+
+wf_tune <- workflow() %>%
+  add_model(rf_tunable_spec) %>%
+  add_recipe(model_recipe)
+
+wf_final <- finalize_workflow(
+  wf_tune,
+  hp_best
+)
+
+```
+
+```{r}
+final_fit <- last_fit(
+  wf_final,  
+  data_split      
+)
+
+```
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(patchwork)
+library(viridis)
+
+
+library(tidyverse)
+library(tidymodels)
+library(patchwork)
+library(viridis)
+
+
+clean_data <- clean_data %>%
+  filter(!is.na(q_mean))  # Remove rows where 
+
+model_recipe <- recipe(q_mean ~ ., data = clean_data) %>%
+  step_rm(gauge_lat, gauge_lon) %>%  # Remove lat/lon columns (not used in modeling)
+  step_unknown(all_nominal(), -all_outcomes()) %>%  # Handle missing categories in categorical variables
+  step_normalize(all_numeric(), -all_outcomes()) %>%  # Normalize numeric variables
+  step_dummy(all_nominal(), -all_outcomes())         # Create dummy variables for categorical variables
+
+
+
+
+
+
+
+
+final_model_full <- fit(wf_final, clean_data)
+
+# 2. Predict
+predictions_full <- augment(final_model_full, clean_data)
+
+# 3. Calculate residuals
+predictions_full <- predictions_full %>%
+  mutate(residual_sq = (q_mean - .pred)^2)
+
+# 4. Maps
+pred_map <- ggplot(predictions_full, aes(x = gauge_lon, y = gauge_lat)) +
+  geom_point(aes(color = .pred)) +
+  scale_color_viridis_c(option = "plasma") +
+  coord_fixed() +
+  labs(
+    title = "Predicted Q Mean Across CONUS",
+    x = "Longitude",
+    y = "Latitude",
+    color = "Prediction"
+  ) +
+  theme_minimal()
+
+resid_map <- ggplot(predictions_full, aes(x = gauge_lon, y = gauge_lat)) +
+  geom_point(aes(color = residual_sq)) +
+  scale_color_viridis_c(option = "magma") +
+  coord_fixed() +
+  labs(
+    title = "Residuals (Squared Error) Across CONUS",
+    x = "Longitude",
+    y = "Latitude",
+    color = "Residual^2"
+  ) +
+  theme_minimal()
+
+# 5. Combine with patchwork
+pred_map + resid_map
+```
+
+
+
